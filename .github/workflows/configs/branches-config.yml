@@ -1,0 +1,8 @@
+---
+github:
+  - organization: gigabytte
+    included-repo-regex: ^test-
+    exempt-authors-regex: ^dependabot
+    exempt-branches-regex: ^(main|master|release)$
+    days-before-branch-stale: 30
+    days-before-branch-delete: 60

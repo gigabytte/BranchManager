@@ -1,0 +1,119 @@
+name: BranchManager - Stale Branch Cleanup
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode'
+        type: boolean
+        default: true
+      verbose:
+        description: 'Enable verbose logging'
+        type: boolean
+        default: false
+      container_version:
+        description: 'Container version to use'
+        type: string
+        default: '0.1.0'
+      config_file_path:
+        description: 'Path to the configuration file'
+        type: string
+        default: '.github/workflows/configs/branches-config.yml'
+
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DEFAULT_VERSION: "0.1.0"
+  DEFAULT_CONFIG: ".github/workflows/configs/branches-config.yml"
+
+jobs:
+  branches-cleanup:
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Set variables
+      id: vars
+      run: |
+        # Determine values based on trigger type
+        case "${{ github.event_name }}" in
+          "workflow_dispatch")
+            DRY_RUN="${{ inputs.dry_run }}"
+            VERBOSE="${{ inputs.verbose }}"
+            VERSION="${{ inputs.container_version }}"
+            CONFIG="${{ inputs.config_file_path }}"
+            ;;
+          "schedule")
+            DRY_RUN="false"
+            VERBOSE="true"
+            VERSION="${{ env.DEFAULT_VERSION }}"
+            CONFIG="${{ env.DEFAULT_CONFIG }}"
+            ;;
+          *)
+            DRY_RUN="true"
+            VERBOSE="true"
+            VERSION="${{ env.DEFAULT_VERSION }}"
+            CONFIG="${{ env.DEFAULT_CONFIG }}"
+            ;;
+        esac
+
+        # Clean image name
+        IMAGE_CLEAN=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+        FULL_IMAGE="${{ env.REGISTRY }}/${IMAGE_CLEAN}:${VERSION}"
+
+        # Output variables
+        echo "registry=${{ env.REGISTRY }}" >> $GITHUB_OUTPUT
+        echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+        echo "config=$CONFIG" >> $GITHUB_OUTPUT
+        echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+        echo "verbose=$VERBOSE" >> $GITHUB_OUTPUT
+
+        echo "🔧 Variables set:"
+        echo "  Image: $FULL_IMAGE"
+        echo "  Config: $CONFIG"
+        echo "  Dry run: $DRY_RUN"
+        echo "  Verbose: $VERBOSE"
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ steps.vars.outputs.registry }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Pull Docker image
+      run: |
+        echo "Pulling image: ${{ steps.vars.outputs.image }}"
+        docker pull "${{ steps.vars.outputs.image }}"
+
+    - name: Run branch manager
+      env:
+        ACCESS_TOKEN: ${{ secrets.INTEGRATOR_PAT_REPO_PUSH }}
+      run: |
+        CMD_ARGS="--config /app/config/config.yml"
+
+        if [[ "${{ steps.vars.outputs.dry_run }}" == "true" ]]; then
+          CMD_ARGS="$CMD_ARGS --dry-run"
+        fi
+
+        if [[ "${{ steps.vars.outputs.verbose }}" == "true" ]]; then
+          CMD_ARGS="$CMD_ARGS --verbose"
+        fi
+
+        echo "Running: ${{ steps.vars.outputs.image }}"
+        echo "Args: $CMD_ARGS"
+
+        docker run --rm \
+          -v "$(pwd)/${{ steps.vars.outputs.config }}:/app/config/config.yml:ro" \
+          -e ACCESS_TOKEN="$ACCESS_TOKEN" \
+          "${{ steps.vars.outputs.image }}" \
+          $CMD_ARGS
